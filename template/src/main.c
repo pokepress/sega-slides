@@ -15,10 +15,16 @@
 static int16_t slide_num;
 
 // Decompress a slide into memory, then flip it to the screen at 0,0 in
-// background layer A.
+// background layers A & B.
 static void displayNewSlide() {
   const Image* slide = slides[slide_num];
-  VDP_drawImage(BG_A, slide, /* x= */ 0, /* y= */ 0);
+  const Image* slide_top = slides_top[slide_num];
+  PAL_fadeOutAll(1, false);
+  VDP_drawImageEx(BG_B, slide, TILE_ATTR_FULL(PAL0, false, false, false, 0),/* x= */ 0, /* y= */ 0, false, false);
+  int numTile = slide->tileset->numTile;
+  VDP_drawImageEx(BG_A, slide_top, TILE_ATTR_FULL(PAL1, false, false, false, numTile), /* x= */ 0, /* y= */ 0, false, false);
+  PAL_fadeToPalette(PAL0,slide->palette->data,1,false);
+  PAL_fadeToPalette(PAL1,slide_top->palette->data,1,false);
 }
 
 // Handle controller events.
