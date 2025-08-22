@@ -17,7 +17,7 @@ Burn the ROM to a flash cart, or run in an emulator.
 
 Requires ImageMagick and pdftoppm to convert images, and Docker to compile the
 ROM using SGDK.  On Ubuntu, install packages "python3", "imagemagick",
-"poppler-utils", and "docker.io".
+"poppler-utils", "Pillow" and "docker.io".
 """
 
 import argparse
@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from PIL import Image
 
 
 # SGDK image to compile the ROM.
@@ -42,6 +43,10 @@ SLIDES_H_TEMPLATE = '''
 
 const Image* slides[] = {{
 {image_pointers}
+}};
+
+const Image* slides_top[] = {{
+{image_pointers_top}
 }};
 
 const int num_slides = {num_slides};
@@ -137,6 +142,7 @@ def process_slides(pdf_path, pages_dir, start_page, end_page, app_dir):
   # Process those pages by downscaling and reducing colors.
   resource_list = []
   image_pointers = []
+  image_pointers_top = []
   page_paths = sorted(glob.glob(os.path.join(pages_dir, 'page-*.png')))
 
   page_num = 1
@@ -166,25 +172,59 @@ def process_slides(pdf_path, pages_dir, start_page, end_page, app_dir):
         '-background', 'black',
         '-gravity', 'center',
         '-extent', '320x224',
-        # Reduce color bit depth to 4 bits per channel before quantizing and
+        # Reduce color bit depth to 3 bits per channel before quantizing and
         # computing the palette.
-        '-depth', '4',
+        '-depth', '3',
       ]
       # Dithering settings.
       args.extend(dithering_args)
       args.extend([
-        # Reduce to 15 colors (the max you can do in one palette on Sega).
-        '-colors', '15',
+        # Reduce to 30 colors (the max you can do in two palettes on Sega).
+        '-colors', '30',
         # Output a PNG image with an 8-bit palette.
         'PNG8:{}'.format(output_path),
       ])
       subprocess.run(check=True, args=args)
 
+      #open file and split into backgounds
+      img = Image.open(output_path)
+      
+      palette = img.getpalette()
+      palette_bottom = palette[0:45]
+      palette_bottom.extend([0] * (768 - len(palette_bottom)))
+      palette_top = palette_bottom[0:3]
+      palette_top.extend(palette[45:])
+      palette_top.extend([0] * (768 - len(palette_top)))
+
+      img_bottom = Image.new(mode="P", size=(320,224))
+      img_bottom.putpalette(palette_bottom)
+      img_top = Image.new(mode="P", size=(320,224))
+      img_top.putpalette(palette_top)
+      img_top.info['transparency'] = 0
+
+      for y in range(224):
+        for x in range(320):
+          pixel = img.getpixel((x,y))
+          if pixel < 15:
+            img_bottom.putpixel((x,y),pixel)
+            img_top.putpixel((x,y),0)
+          else:
+            img_top.putpixel((x,y),pixel-15+1)
+
+      img_bottom.save(output_path.replace(".png","_bottom.png"))
+      img_top.save(output_path.replace(".png","_top.png"))
+
       resource_list.append(
-          'IMAGE slide_{page_num} {page_filename} BEST'.format(
-              page_num=page_num, page_filename=page_filename))
+          'IMAGE slide_{page_num}_bottom {page_filename} BEST'.format(
+              page_num=page_num, page_filename=page_filename.replace(".png","_bottom.png")))
       image_pointers.append(
-          '  &slide_{page_num},'.format(
+          '  &slide_{page_num}_bottom,'.format(
+              page_num=page_num))
+      resource_list.append(
+          'IMAGE slide_{page_num}_top {page_filename_top} BEST'.format(
+              page_num=page_num, page_filename_top=page_filename.replace(".png","_top.png")))
+      image_pointers_top.append(
+          '  &slide_{page_num}_top,'.format(
               page_num=page_num))
 
       print('\rProcessed {} / {}... '.format(
@@ -197,6 +237,7 @@ def process_slides(pdf_path, pages_dir, start_page, end_page, app_dir):
   with open(os.path.join(app_dir, 'src', 'slides.h'), 'w') as f:
     f.write(SLIDES_H_TEMPLATE.format(
         image_pointers='\n'.join(image_pointers),
+        image_pointers_top='\n'.join(image_pointers_top),
         num_slides=len(image_pointers)))
 
   with open(os.path.join(app_dir, 'res', 'slide_data.res'), 'w') as f:
